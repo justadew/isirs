@@ -1,17 +1,19 @@
 """
 MediBot - Chatbot Informasi RS Sehat Sentosa (Streamlit version)
+Menggunakan Groq API (gratis, cepat, tidak perlu kartu kredit)
 
 Cara menjalankan:
     1. pip install -r requirements.txt
-    2. Set environment variable LOVABLE_API_KEY (atau OPENAI_API_KEY untuk OpenAI)
-       Linux/Mac:  export LOVABLE_API_KEY="your-key-here"
-       Windows:    set LOVABLE_API_KEY=your-key-here
-    3. streamlit run app.py
+    2. Buat akun Groq: https://console.groq.com
+    3. Set environment variable GROQ_API_KEY
+       Linux/Mac:  export GROQ_API_KEY="your-key-here"
+       Windows:    set GROQ_API_KEY=your-key-here
+    4. streamlit run app.py
 """
 
 import os
 import streamlit as st
-from openai import OpenAI
+from groq import Groq
 
 # ---------- Konfigurasi halaman ----------
 st.set_page_config(
@@ -77,38 +79,35 @@ SUGGESTIONS = [
     "Alamat dan kontak IGD",
 ]
 
-# ---------- AI client ----------
+# ---------- Initialize Groq Client ----------
 @st.cache_resource
-def get_client():
-    """Buat OpenAI-compatible client. Default ke Lovable AI Gateway,
-    fallback ke OpenAI jika OPENAI_API_KEY di-set."""
-    lovable_key = os.getenv("LOVABLE_API_KEY")
-    openai_key = os.getenv("OPENAI_API_KEY")
+def get_groq_client():
+    """Initialize Groq client"""
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return None
+    return Groq(api_key=api_key)
 
-    if lovable_key:
-        return OpenAI(
-            api_key=lovable_key,
-            base_url="https://ai.gateway.lovable.dev/v1",
-            default_headers={"Lovable-API-Key": lovable_key},
-        ), "google/gemini-3-flash-preview"
-    if openai_key:
-        return OpenAI(api_key=openai_key), "gpt-4o-mini"
-    return None, None
-
-
-def stream_reply(client, model, messages):
-    """Stream balasan AI token-per-token."""
-    stream = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}, *messages],
-        stream=True,
-        temperature=0.7,
-    )
-    for chunk in stream:
-        delta = chunk.choices[0].delta.content if chunk.choices else None
-        if delta:
-            yield delta
-
+def stream_reply(client, messages):
+    """Stream balasan AI token-per-token menggunakan Groq"""
+    try:
+        stream = client.chat.completions.create(
+            model="mixtral-8x7b-32768",
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}, *messages],
+            stream=True,
+            temperature=0.7,
+            max_tokens=1024,
+        )
+        full_response = ""
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                delta = chunk.choices[0].delta.content
+                full_response += delta
+                yield delta
+        return full_response
+    except Exception as e:
+        yield f"❌ Error: {str(e)}"
+        return ""
 
 # ---------- Sidebar ----------
 with st.sidebar:
@@ -150,14 +149,27 @@ st.divider()
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-client, model = get_client()
+client = get_groq_client()
 
 # ---------- Pesan kesalahan jika tidak ada API key ----------
 if client is None:
     st.error(
-        "❌ **API key belum diset.** Atur environment variable `LOVABLE_API_KEY` "
-        "(atau `OPENAI_API_KEY`) lalu jalankan ulang aplikasi.\n\n"
-        "```bash\nexport LOVABLE_API_KEY=\"your-key\"\nstreamlit run app.py\n```"
+        "❌ **GROQ_API_KEY belum diset.** \n\n"
+        "**Cara setup:**\n"
+        "1. Buka https://console.groq.com\n"
+        "2. Sign up dengan email\n"
+        "3. Buat API key di tab 'API Keys'\n"
+        "4. Copy key-nya\n"
+        "5. Di Streamlit Cloud → Settings → Secrets, paste:\n"
+        "```\n"
+        "GROQ_API_KEY=\"your-api-key-here\"\n"
+        "```\n"
+        "6. Klik Save & app akan auto-restart\n\n"
+        "**Atau untuk local testing:**\n"
+        "```bash\n"
+        "export GROQ_API_KEY=\"your-key\"\n"
+        "streamlit run app.py\n"
+        "```"
     )
     st.stop()
 
@@ -181,10 +193,10 @@ for msg in st.session_state.messages:
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     with st.chat_message("assistant", avatar="🩺"):
         try:
-            reply = st.write_stream(stream_reply(client, model, st.session_state.messages))
+            reply = st.write_stream(stream_reply(client, st.session_state.messages))
             st.session_state.messages.append({"role": "assistant", "content": reply})
         except Exception as e:
-            st.error(f"Gagal terhubung ke AI: {e}")
+            st.error(f"Gagal terhubung ke Groq: {e}")
 
 # ---------- Composer ----------
 prompt = st.chat_input("Tanyakan jadwal dokter, layanan, atau cara daftar…")
